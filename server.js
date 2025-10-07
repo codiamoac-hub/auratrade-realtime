@@ -1,24 +1,26 @@
 import express from "express";
-import http from "http";
+import { createServer } from "http";
 import { Server } from "socket.io";
 
 const app = express();
-const server = http.createServer(app);
-
+const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // later replace this with your real website domain
-    methods: ["GET", "POST"],
+    origin: "*",
   },
 });
 
 io.on("connection", (socket) => {
-  console.log("✅ New user connected:", socket.id);
+  console.log("A user connected");
 
-  // join a room for a specific order
-  socket.on("join_order", (orderId) => {
-    socket.join(orderId);
-    console.log(`🟢 User joined room: ${orderId}`);
+  socket.on("disconnect", () => {
+    console.log("User disconnected");
   });
+});
+
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
 
 
