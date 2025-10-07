@@ -1,0 +1,14 @@
+{
+  "name": "auratrade-realtime",
+  "version": "1.0.0",
+  "description": "WebSocket server for AuraTrade live chat",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.2"
+  }
+}
