@@ -18,58 +18,64 @@ const io = new Server(server, {
   }
 });
 
-// ✅ QuickNode RPC
-const RPC_URL = "https://green-cosmopolitan-patina.solana-mainnet.quiknode.pro/aabe546d992ca75cc13fa9e855334094785a9b98";
+// 🧠 Your QuickNode RPC endpoint
+const RPC_URL = "https://green-cosmopolitan-patina.solana-mainnet.quiknode.pro/aabe546d992ca75cc13fa9e855334094785a9b98/";
 
+// ⚙️ Helper: check transaction status quickly
 async function checkTxStatus(txHash) {
   try {
-    const res = await fetch(RPC_URL, {
+    const response = await fetch(RPC_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
         method: "getSignatureStatuses",
-        params: [[txHash]]
+        params: [[txHash], { searchTransactionHistory: true }]
       })
     });
-    const json = await res.json();
-    const status = json.result?.value?.[0];
+
+    const data = await response.json();
+    const status = data?.result?.value?.[0];
+
     if (!status) return "pending";
     if (status.err) return "failed";
-    if (status.confirmationStatus === "finalized") return "verified";
+    if (status.confirmations === null || status.confirmationStatus === "finalized")
+      return "verified";
     return "pending";
   } catch (e) {
-    console.error("RPC Error:", e);
+    console.error("❌ Error checking TX:", e.message);
     return "failed";
   }
 }
 
+// 🚀 Socket.io real-time events
 io.on("connection", (socket) => {
-  console.log("✅ Client connected:", socket.id);
+  console.log("✅ New client connected:", socket.id);
 
-  // 🔹 Realtime CHAT
+  // 💬 Live chat messages
   socket.on("message", (msg) => {
-    console.log("💬 Message received:", msg);
-    io.emit("message", msg);        // broadcast to all clients
+    console.log("💬 Message:", msg);
+    io.emit("message", msg);
   });
 
-  // 🔹 Realtime TX Verification
+  // 💸 Transaction verification
   socket.on("verifyTx", async ({ txHash, orderId, userId }) => {
     console.log("🔍 Checking TX:", txHash);
     io.emit("txStatus", { txHash, status: "pending" });
 
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      attempts++;
+    // Fast polling (every 2s, up to 8 tries)
+    for (let i = 0; i < 8; i++) {
       const status = await checkTxStatus(txHash);
-      console.log(`🧩 TX ${txHash} → ${status}`);
+      console.log(`⚡ TX ${txHash} → ${status}`);
       io.emit("txStatus", { txHash, status });
 
-      if (status === "verified" || status === "failed" || attempts > 10) {
-        clearInterval(interval);
-      }
-    }, 6000);
+      if (status === "verified" || status === "failed") return;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // if still not confirmed after 8 tries
+    io.emit("txStatus", { txHash, status: "timeout" });
   });
 
   socket.on("disconnect", () => {
@@ -78,8 +84,10 @@ io.on("connection", (socket) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("AuraTrade Realtime Server ✅");
+  res.send("AuraTrade WebSocket server is running ✅");
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
