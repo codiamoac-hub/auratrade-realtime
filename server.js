@@ -6,7 +6,7 @@ import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 
 // ===================================================
-// ⚙️ SUPABASE SETUP
+// ⚙️ SUPABASE CONFIG
 // ===================================================
 const supabase = createClient(
   "https://sdknfiufozodqhwhslaa.supabase.co",
@@ -39,24 +39,37 @@ const io = new Server(server, {
 });
 
 // ===================================================
-// 💬 CHAT SYSTEM
+// 👑 ADMIN ACCOUNTS
+// ===================================================
+const ADMINS = ["bruvvv21", "cadoreleri"];
+
+// ===================================================
+// 💬 CHAT + TRANSACTIONS SYSTEM
 // ===================================================
 io.on("connection", (socket) => {
   console.log("✅ Client connected:", socket.id);
 
-  // Normal chat
+  // =========================
+  // 🗨️ Chat handling
+  // =========================
   socket.on("message", (msg) => {
     console.log("💬 Message:", msg);
     io.emit("message", msg);
   });
 
-  // Admin joins room
-  socket.on("joinAdmin", () => {
-    socket.join("admins");
-    console.log("👑 Admin joined:", socket.id);
+  // =========================
+  // 🧠 Role joining
+  // =========================
+  socket.on("joinRole", ({ username }) => {
+    if (ADMINS.includes(username)) {
+      socket.join("admins");
+      console.log(`👑 Admin joined: ${username} (${socket.id})`);
+    }
   });
 
-  // Transaction submitted from frontend
+  // =========================
+  // 💸 Transaction submitted
+  // =========================
   socket.on("transactionSubmitted", async (txData) => {
     console.log("💸 TX submitted:", txData);
 
@@ -69,14 +82,16 @@ io.on("connection", (socket) => {
       if (error) throw error;
       const tx = data[0];
 
-      io.emit("transactionUpdate", tx); // broadcast to everyone
+      io.emit("transactionUpdate", tx);
       io.to("admins").emit("adminTxUpdate", tx);
     } catch (err) {
       console.error("❌ Error saving TX:", err.message);
     }
   });
 
-  // Admin verifying or rejecting transaction
+  // =========================
+  // 🔍 Admin verify/reject
+  // =========================
   socket.on("verifyTransaction", async ({ tx_hash, status, verified_by }) => {
     console.log(`🔍 Admin verified TX ${tx_hash} → ${status}`);
 
@@ -99,7 +114,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ Client disconnected:", socket.id);
+    console.log("❌ Disconnected:", socket.id);
   });
 });
 
@@ -119,15 +134,13 @@ supabase
       io.emit("transactionUpdate", tx);
       io.to("admins").emit("adminTxUpdate", tx);
 
-      // Trigger Solana verification if pending
+      // Check Solana status if still pending
       if (tx.status === "pending" && tx.tx_hash) {
         verifySolanaTx(tx);
       }
     }
   )
-  .subscribe((status) => {
-    console.log("🟢 Supabase Realtime Status:", status);
-  });
+  .subscribe((status) => console.log("🟢 Supabase Realtime:", status));
 
 // ===================================================
 // 🧠 SOLANA TX VERIFIER
@@ -148,8 +161,8 @@ async function verifySolanaTx(tx) {
 
     const data = await response.json();
     const status = data?.result?.value?.[0];
-
     let finalStatus = "pending";
+
     if (status?.confirmationStatus === "finalized") finalStatus = "verified";
     else if (status === null) finalStatus = "failed";
 
@@ -169,10 +182,10 @@ async function verifySolanaTx(tx) {
 }
 
 // ===================================================
-// 🧩 HEALTH CHECK
+// 🩺 HEALTH CHECK
 // ===================================================
 app.get("/", (req, res) => {
-  res.send("✅ AuraTrade Realtime + Solana TX Verifier active");
+  res.send("✅ AuraTrade Realtime + Solana Verifier + Admin Sync Running");
 });
 
 const PORT = process.env.PORT || 10000;
