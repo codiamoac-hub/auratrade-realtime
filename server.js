@@ -139,3 +139,41 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () =>
   console.log(`🚀 Server running on port ${PORT}`)
 );
+import { io } from "socket.io-client";
+const socket = io("https://auratrade-realtime.onrender.com"); // your Render server URL
+
+// Listen for live updates
+useEffect(() => {
+  socket.on("transactionUpdate", (tx) => {
+    if (tx.order_id === currentOrderId) {
+      setTransactions((prev) => {
+        const exists = prev.find((t) => t.tx_hash === tx.tx_hash);
+        if (exists) {
+          return prev.map((t) => (t.tx_hash === tx.tx_hash ? tx : t));
+        }
+        return [...prev, tx];
+      });
+    }
+  });
+
+  return () => socket.off("transactionUpdate");
+}, [currentOrderId]);
+
+// When user submits a TX
+const handleSubmit = async () => {
+  const newTx = {
+    order_id: currentOrderId,
+    tx_hash,
+    amount,
+    currency,
+    user_id,
+    status: "pending",
+    role: userRole,
+  };
+
+  // 1️⃣ Show immediately on screen (optimistic)
+  setTransactions((prev) => [...prev, newTx]);
+
+  // 2️⃣ Emit to backend
+  socket.emit("transactionSubmitted", newTx);
+};
