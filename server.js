@@ -4,13 +4,15 @@ import { Server } from "socket.io";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
 
-// === Supabase Config ===
-const SUPABASE_URL = "https://sdknfiufozodqhwhslaa.supabase.co";
-const SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNka25maXVmb3pvZHFod2hzbGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNTAyNzMsImV4cCI6MjA3NDgyNjI3M30.EhsCvTUmZwBq4VFTCp0cCkTkLZUAiW4t88vcLLn5684";
+// 🪙 Solana RPC
+const RPC_URL = "https://green-cosmopolitan-patina.solana-mainnet.quiknode.pro/aabe546d992ca75cc13fa9e855334094785a9b98";
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+// ⚙️ Supabase client
+const supabase = createClient(
+  "https://sdknfiufozodqhwhslaa.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNka25maXVmb3pvZHFod2hzbGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNTAyNzMsImV4cCI6MjA3NDgyNjI3M30.EhsCvTUmZwBq4VFTCp0cCkTkLZUAiW4t88vcLLn5684"
+);
 
-// === Express + Socket.io Setup ===
 const app = express();
 app.use(
   cors({
@@ -28,105 +30,112 @@ const io = new Server(server, {
 });
 
 // ===================================================
-// 💬 CHAT SYSTEM (KEEP AS IS — UNCHANGED)
+// 💬 CHAT SYSTEM
 // ===================================================
 io.on("connection", (socket) => {
-  console.log("✅ New client connected:", socket.id);
+  console.log("✅ Client connected:", socket.id);
 
   socket.on("message", (msg) => {
     console.log("💬 Message received:", msg);
     io.emit("message", msg);
   });
 
-  // ===================================================
-  // 💸 TRANSACTION SYSTEM (Improved & Safe)
-  // ===================================================
-  socket.on("transactionSubmitted", async (txData) => {
-    console.log("💸 Transaction submitted:", txData);
-
-    try {
-      const { error } = await supabase.from("transactions").insert([
-        {
-          order_id: txData.order_id,
-          tx_hash: txData.tx_hash,
-          status: "pending",
-          amount: txData.amount,
-          currency: txData.currency,
-          user_id: txData.user_id,
-          role: txData.role, // buyer / seller
-        },
-      ]);
-
-      if (error) throw error;
-
-      io.emit(`transactionUpdate:${txData.order_id}`, {
-        type: "pending",
-        ...txData,
-      });
-    } catch (err) {
-      console.error("❌ Error saving TX:", err.message);
-    }
+  socket.on("joinAdmin", () => {
+    console.log("👑 Admin joined:", socket.id);
+    socket.join("admins");
   });
 
-  // === ADMIN VERIFICATION ===
-  socket.on(
-    "verifyTransaction",
-    async ({ order_id, tx_hash, verified_by, status }) => {
-      console.log(`🔍 Admin ${status} TX:`, tx_hash);
+  socket.on("verifyTransaction", async ({ tx_hash, status, verified_by }) => {
+    console.log(`🔍 Admin verified TX: ${tx_hash} → ${status}`);
 
-      try {
-        const { error } = await supabase
-          .from("transactions")
-          .update({ status, verified_by })
-          .eq("tx_hash", tx_hash);
+    await supabase
+      .from("transactions")
+      .update({ status, verified_by })
+      .eq("tx_hash", tx_hash);
 
-        if (error) throw error;
+    io.to("admins").emit("adminTxVerified", { tx_hash, status });
+    io.emit("transactionUpdate", { tx_hash, status });
+  });
 
-        io.emit(`transactionUpdate:${order_id}`, {
-          type: status,
-          tx_hash,
-          verified_by,
-        });
-      } catch (err) {
-        console.error("❌ Error verifying TX:", err.message);
-      }
-    }
-  );
-
-  // ===================================================
-  // 🔁 SUPABASE REALTIME LISTENER (FALLBACK)
-  // ===================================================
-  const realtimeChannel = supabase
-    .channel("transactions-realtime")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "transactions" },
-      (payload) => {
-        console.log("🔄 Supabase Realtime payload:", payload);
-        io.emit(`transactionUpdate:${payload.new.order_id}`, payload.new);
-      }
-    )
-    .subscribe((status) => {
-      if (status === "SUBSCRIBED")
-        console.log("✅ Supabase Realtime connected");
-      if (status === "CHANNEL_ERROR")
-        console.error("❌ Realtime channel error detected!");
-    });
-
-  // === Disconnect Cleanup ===
   socket.on("disconnect", () => {
     console.log("❌ Client disconnected:", socket.id);
-    supabase.removeChannel(realtimeChannel);
   });
 });
 
-// === Root Health Check ===
+// ===================================================
+// 🔁 SUPABASE REALTIME WATCHER
+// ===================================================
+supabase
+  .channel("transactions-realtime")
+  .on(
+    "postgres_changes",
+    { event: "*", schema: "public", table: "transactions" },
+    async (payload) => {
+      const tx = payload.new;
+      console.log("📡 TX Update:", tx);
+
+      // Immediately broadcast to frontend
+      io.emit("transactionUpdate", tx);
+      io.to("admins").emit("adminTxUpdate", tx);
+
+      // Trigger Solana verification in background
+      if (tx.status === "pending" && tx.tx_hash) {
+        verifySolanaTx(tx);
+      }
+    }
+  )
+  .subscribe();
+
+// ===================================================
+// 🧠 Solana TX verifier
+// ===================================================
+async function verifySolanaTx(tx) {
+  console.log(`🔍 Checking Solana TX: ${tx.tx_hash}`);
+  try {
+    const response = await fetch(RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getSignatureStatuses",
+        params: [[tx.tx_hash], { searchTransactionHistory: true }],
+      }),
+    });
+
+    const data = await response.json();
+    const status = data?.result?.value?.[0];
+
+    let finalStatus = "pending";
+    if (status?.confirmationStatus === "finalized") finalStatus = "verified";
+    else if (status === null) finalStatus = "failed";
+
+    if (finalStatus !== "pending") {
+      // Update Supabase
+      await supabase
+        .from("transactions")
+        .update({ status: finalStatus })
+        .eq("tx_hash", tx.tx_hash);
+
+      // Notify frontend
+      io.emit("transactionUpdate", { ...tx, status: finalStatus });
+      io.to("admins").emit("adminTxUpdate", { ...tx, status: finalStatus });
+
+      console.log(`✅ TX ${tx.tx_hash} is now ${finalStatus}`);
+    }
+  } catch (err) {
+    console.error("❌ Error verifying TX:", err.message);
+  }
+}
+
+// ===================================================
+// 🧩 Health check
+// ===================================================
 app.get("/", (req, res) => {
-  res.send("AuraTrade WebSocket + Realtime Transactions Server ✅");
+  res.send("AuraTrade Realtime + Solscan live verifier ✅");
 });
 
-// === Start Server ===
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+server.listen(PORT, () =>
+  console.log(`🚀 Server running on port ${PORT}`)
+);
