@@ -1,7 +1,7 @@
 {
   "name": "auratrade-realtime",
   "version": "1.0.0",
-  "description": "AuraTrade realtime chat + transaction verification",
+  "description": "WebSocket server for AuraTrade live chat + Supabase realtime transactions",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -13,7 +13,7 @@
     "cors": "^2.8.5",
     "node-fetch": "^3.3.2",
     "@supabase/supabase-js": "^2.44.4",
-    "pg": "^8.11.3",
+    "pg": "^8.11.5",
     "dotenv": "^16.4.5"
   }
 }
