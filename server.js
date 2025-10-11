@@ -2,26 +2,26 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
-import fetch from "node-fetch";
+import pkg from "pg"; // 👈 Postgres client
+const { Client } = pkg;
 import { createClient } from "@supabase/supabase-js";
 
-// ===================================================
-// ⚙️ SUPABASE CONFIG
-// ===================================================
-const supabase = createClient(
-  "https://sdknfiufozodqhwhslaa.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNka25maXVmb3pvZHFod2hzbGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNTAyNzMsImV4cCI6MjA3NDgyNjI3M30.EhsCvTUmZwBq4VFTCp0cCkTkLZUAiW4t88vcLLn5684"
-);
+// ⚙️ Supabase setup
+const SUPABASE_URL = "https://sdknfiufozodqhwhslaa.supabase.co";
+const SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNka25maXVmb3pvZHFod2hzbGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNTAyNzMsImV4cCI6MjA3NDgyNjI3M30.EhsCvTUmZwBq4VFTCp0cCkTkLZUAiW4t88vcLLn5684"; // secure in env vars
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// ===================================================
-// 🪙 SOLANA RPC CONFIG
-// ===================================================
-const RPC_URL =
-  "https://green-cosmopolitan-patina.solana-mainnet.quiknode.pro/aabe546d992ca75cc13fa9e855334094785a9b98";
+// 🪙 Solana RPC
+const RPC_URL = "https://green-cosmopolitan-patina.solana-mainnet.quiknode.pro/aabe546d992ca75cc13fa9e855334094785a9b98";
 
-// ===================================================
-// 🚀 EXPRESS + SOCKET.IO INIT
-// ===================================================
+// ⚙️ Postgres listener setup
+const pgClient = new Client({
+  connectionString: process.env.DATABASE_URL || "YOUR_SUPABASE_DB_CONNECTION_STRING",
+  ssl: { rejectUnauthorized: false },
+});
+await pgClient.connect();
+
+// Express + Socket setup
 const app = express();
 app.use(
   cors({
@@ -29,7 +29,6 @@ app.use(
     methods: ["GET", "POST"],
   })
 );
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -38,79 +37,15 @@ const io = new Server(server, {
   },
 });
 
-// ===================================================
-// 👑 ADMIN ACCOUNTS
-// ===================================================
-const ADMINS = ["bruvvv21", "cadoreleri"];
-
-// ===================================================
-// 💬 CHAT + TRANSACTIONS SYSTEM
-// ===================================================
+// ================================================
+// 💬 CHAT SYSTEM (unchanged)
+// ================================================
 io.on("connection", (socket) => {
   console.log("✅ Client connected:", socket.id);
 
-  // =========================
-  // 🗨️ Chat handling
-  // =========================
   socket.on("message", (msg) => {
     console.log("💬 Message:", msg);
     io.emit("message", msg);
-  });
-
-  // =========================
-  // 🧠 Role joining
-  // =========================
-  socket.on("joinRole", ({ username }) => {
-    if (ADMINS.includes(username)) {
-      socket.join("admins");
-      console.log(`👑 Admin joined: ${username} (${socket.id})`);
-    }
-  });
-
-  // =========================
-  // 💸 Transaction submitted
-  // =========================
-  socket.on("transactionSubmitted", async (txData) => {
-    console.log("💸 TX submitted:", txData);
-
-    try {
-      const { data, error } = await supabase
-        .from("transactions")
-        .insert([txData])
-        .select("*");
-
-      if (error) throw error;
-      const tx = data[0];
-
-      io.emit("transactionUpdate", tx);
-      io.to("admins").emit("adminTxUpdate", tx);
-    } catch (err) {
-      console.error("❌ Error saving TX:", err.message);
-    }
-  });
-
-  // =========================
-  // 🔍 Admin verify/reject
-  // =========================
-  socket.on("verifyTransaction", async ({ tx_hash, status, verified_by }) => {
-    console.log(`🔍 Admin verified TX ${tx_hash} → ${status}`);
-
-    try {
-      const { data, error } = await supabase
-        .from("transactions")
-        .update({ status, verified_by })
-        .eq("tx_hash", tx_hash)
-        .select("*");
-
-      if (error) throw error;
-      const tx = data[0];
-
-      io.emit("transactionUpdate", tx);
-      io.to("admins").emit("adminTxVerified", tx);
-      console.log(`✅ TX ${tx_hash} updated to ${status}`);
-    } catch (err) {
-      console.error("❌ Error verifying TX:", err.message);
-    }
   });
 
   socket.on("disconnect", () => {
@@ -118,37 +53,31 @@ io.on("connection", (socket) => {
   });
 });
 
-// ===================================================
-// 🔁 SUPABASE REALTIME LISTENER
-// ===================================================
-supabase
-  .channel("transactions-realtime")
-  .on(
-    "postgres_changes",
-    { event: "*", schema: "public", table: "transactions" },
-    async (payload) => {
-      const tx = payload.new;
-      if (!tx) return;
+// ================================================
+// 🧠 LISTEN TO TRANSACTION CHANGES IN POSTGRES
+// ================================================
+await pgClient.query("LISTEN transactions_changes");
 
-      console.log("📡 Realtime TX update:", tx);
-      io.emit("transactionUpdate", tx);
-      io.to("admins").emit("adminTxUpdate", tx);
+pgClient.on("notification", async (msg) => {
+  const tx = JSON.parse(msg.payload);
+  console.log("📡 PG_NOTIFY event:", tx);
 
-      // Check Solana status if still pending
-      if (tx.status === "pending" && tx.tx_hash) {
-        verifySolanaTx(tx);
-      }
-    }
-  )
-  .subscribe((status) => console.log("🟢 Supabase Realtime:", status));
+  // Step 1: Broadcast to all connected clients
+  io.emit("transactionUpdate", tx);
 
-// ===================================================
-// 🧠 SOLANA TX VERIFIER
-// ===================================================
+  // Step 2: Verify on-chain if pending
+  if (tx.status === "pending" && tx.tx_hash) {
+    verifySolanaTx(tx);
+  }
+});
+
+// ================================================
+// 💸 Solana verification
+// ================================================
 async function verifySolanaTx(tx) {
   console.log(`🔍 Checking Solana TX: ${tx.tx_hash}`);
   try {
-    const response = await fetch(RPC_URL, {
+    const res = await fetch(RPC_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -159,36 +88,33 @@ async function verifySolanaTx(tx) {
       }),
     });
 
-    const data = await response.json();
+    const data = await res.json();
     const status = data?.result?.value?.[0];
     let finalStatus = "pending";
 
     if (status?.confirmationStatus === "finalized") finalStatus = "verified";
     else if (status === null) finalStatus = "failed";
 
-    if (finalStatus !== "pending") {
+    if (finalStatus !== tx.status) {
       await supabase
         .from("transactions")
         .update({ status: finalStatus })
         .eq("tx_hash", tx.tx_hash);
 
       io.emit("transactionUpdate", { ...tx, status: finalStatus });
-      io.to("admins").emit("adminTxUpdate", { ...tx, status: finalStatus });
-      console.log(`✅ TX ${tx.tx_hash} finalized: ${finalStatus}`);
+      console.log(`✅ TX ${tx.tx_hash} updated → ${finalStatus}`);
     }
   } catch (err) {
-    console.error("❌ Solana verifier error:", err.message);
+    console.error("❌ Error verifying TX:", err.message);
   }
 }
 
-// ===================================================
-// 🩺 HEALTH CHECK
-// ===================================================
+// ================================================
+// 🩺 Health check
+// ================================================
 app.get("/", (req, res) => {
-  res.send("✅ AuraTrade Realtime + Solana Verifier + Admin Sync Running");
+  res.send("✅ AuraTrade Realtime server running with pg_notify + Solana RPC");
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () =>
-  console.log(`🚀 Server running on port ${PORT}`)
-);
+server.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
