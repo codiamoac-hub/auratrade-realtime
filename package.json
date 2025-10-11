@@ -13,6 +13,6 @@
     "cors": "^2.8.5",
     "node-fetch": "^3.3.2",
     "@supabase/supabase-js": "^2.44.4",
-    "pg": "^8.11.3"               // 👈 REQUIRED for pg_notify listener
+    "pg": "^8.11.3"
   }
 }
