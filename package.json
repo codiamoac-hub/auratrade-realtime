@@ -1,7 +1,7 @@
 {
   "name": "auratrade-realtime",
   "version": "1.0.0",
-  "description": "WebSocket server for AuraTrade live chat + Supabase realtime transactions",
+  "description": "WebSocket server for AuraTrade live chat + Supabase realtime transactions + Solana verification",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "socket.io": "^4.7.2",
     "cors": "^2.8.5",
     "node-fetch": "^3.3.2",
-    "@supabase/supabase-js": "^2.44.4"
+    "@supabase/supabase-js": "^2.44.4",
+    "pg": "^8.11.3"               // 👈 REQUIRED for pg_notify listener
   }
 }
