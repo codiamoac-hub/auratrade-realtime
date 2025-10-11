@@ -9,18 +9,28 @@ import { Server } from "socket.io";
 import cors from "cors";
 import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
+import pkg from "pg";
 import "dotenv/config";
 
-// ⚙️ Environment Variables (set these in Render)
+// ===================================================
+// ⚙️ Environment Variables (Set these in Render)
+// ===================================================
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const DATABASE_URL = process.env.DATABASE_URL;
+
 const RPC_URL =
   "https://green-cosmopolitan-patina.solana-mainnet.quiknode.pro/aabe546d992ca75cc13fa9e855334094785a9b98";
 
-// 🗄️ Connect to Supabase
+// ===================================================
+// 🗄️ Supabase + Postgres Connection
+// ===================================================
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const { Client } = pkg;
 
-// 🚀 Express + Socket.IO setup
+// ===================================================
+// 🚀 Express + Socket.IO Setup
+// ===================================================
 const app = express();
 app.use(
   cors({
@@ -38,25 +48,25 @@ const io = new Server(server, {
 });
 
 // ===================================================
-// 💬 CHAT SYSTEM — keep this as before
+// 💬 CHAT SYSTEM — Always Working
 // ===================================================
 io.on("connection", (socket) => {
   console.log("✅ Client connected:", socket.id);
 
-  // User messages
+  // 💬 Chat messages
   socket.on("message", (msg) => {
     console.log("💬 Message received:", msg);
     io.emit("message", msg);
   });
 
-  // Admin joins
+  // 👑 Admin joins
   socket.on("joinAdmin", () => {
     console.log("👑 Admin joined:", socket.id);
     socket.join("admins");
   });
 
   // ===================================================
-  // 💸 Transaction submitted (from buyer/seller)
+  // 💸 Transaction Submitted (Buyer/Seller)
   // ===================================================
   socket.on("transactionSubmitted", async (txData) => {
     console.log("💸 Transaction submitted:", txData);
@@ -74,12 +84,13 @@ io.on("connection", (socket) => {
         },
       ]);
 
+      // broadcast to all
       io.emit(`transactionUpdate:${txData.order_id}`, {
         type: "pending",
         ...txData,
       });
 
-      // start solana verification
+      // start solana verification background
       verifySolanaTx(txData);
     } catch (err) {
       console.error("❌ Error saving TX:", err.message);
@@ -87,7 +98,7 @@ io.on("connection", (socket) => {
   });
 
   // ===================================================
-  // 👑 Admin verifies transaction manually
+  // 👑 Admin Verifies Transaction
   // ===================================================
   socket.on("verifyTransaction", async ({ tx_hash, status, verified_by }) => {
     console.log(`🔍 Admin ${verified_by} → ${status} TX: ${tx_hash}`);
@@ -105,13 +116,14 @@ io.on("connection", (socket) => {
     }
   });
 
+  // 🚪 Handle disconnect
   socket.on("disconnect", () => {
     console.log("❌ Client disconnected:", socket.id);
   });
 });
 
 // ===================================================
-// 🧠 Solana TX verification function
+// 🧠 Solana TX Verification Function
 // ===================================================
 async function verifySolanaTx(tx) {
   console.log(`🔍 Verifying Solana TX: ${tx.tx_hash}`);
@@ -152,7 +164,45 @@ async function verifySolanaTx(tx) {
 }
 
 // ===================================================
-// 🧩 Health check endpoint
+// 📡 PostgreSQL Listener for Supabase Trigger (pg_notify)
+// ===================================================
+if (DATABASE_URL) {
+  const pgClient = new Client({
+    connectionString: DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
+
+  pgClient
+    .connect()
+    .then(() => {
+      console.log("🟢 Connected to Postgres Realtime Listener");
+      pgClient.query("LISTEN transactions_changes");
+    })
+    .catch((err) => console.error("❌ Postgres connection failed:", err.message));
+
+  pgClient.on("notification", async (msg) => {
+    try {
+      const tx = JSON.parse(msg.payload);
+      console.log("📡 Triggered update from Supabase:", tx);
+
+      // Emit realtime event to all users
+      io.emit("transactionUpdate", tx);
+      io.to("admins").emit("adminTxUpdate", tx);
+
+      // Background Solana verification
+      if (tx.status === "pending" && tx.tx_hash) {
+        await verifySolanaTx(tx);
+      }
+    } catch (err) {
+      console.error("❌ Error processing pg_notify:", err.message);
+    }
+  });
+} else {
+  console.warn("⚠️ DATABASE_URL not found — realtime listener disabled");
+}
+
+// ===================================================
+// 🧩 Health Check Endpoint
 // ===================================================
 app.get("/", (req, res) => {
   res.send("AuraTrade Realtime Server ✅ (Chat + Solana Verification Active)");
